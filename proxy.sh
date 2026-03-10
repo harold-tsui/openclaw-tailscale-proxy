@@ -1,24 +1,24 @@
 #!/bin/bash
 # ============================================================
 # OpenClaw Tailscale Proxy Manager
-# 统一管理 Tailscale VPN + Shadowrocket 规则
+# Unified management for Tailscale VPN + Shadowrocket rules
 # ============================================================
 
 set -e
 
-# 路径配置
+# Path configuration
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-# 加载配置
+# Load config
 source "$SCRIPT_DIR/config.sh"
 
-# 确保目录存在
+# Ensure directories exist
 ensure_dirs() {
     mkdir -p "$CACHE_DIR" "$CONFIG_DIR" "$LOG_DIR"
 }
 
 # ============================================================
-# 通用函数
+# Common Functions
 # ============================================================
 
 log() {
@@ -28,197 +28,197 @@ log() {
 }
 
 # ============================================================
-# VPN 相关命令
+# VPN Commands
 # ============================================================
 
-# 检测直连
+# Check direct connection
 check_direct() {
     curl -s --connect-timeout $CHECK_TIMEOUT -o /dev/null -w "%{http_code}" "https://$CHECK_TARGET" 2>/dev/null || echo "000"
 }
 
-# 获取 Tailscale 状态
+# Get Tailscale status
 get_tailscale_status() {
     tailscale status --json 2>/dev/null | grep -o '"BackendState":"[^"]*"' | cut -d'"' -f4 || echo "unknown"
 }
 
-# 检查网络状态
+# Check network status
 cmd_check() {
     ensure_dirs
     local direct_result=$(check_direct)
     local tailscale_status=$(get_tailscale_status)
     
     echo "========================================" >&2
-    echo "🌐 网络状态检查" >&2
+    echo "🌐 Network Status Check" >&2
     echo "========================================" >&2
-    echo "直连 $CHECK_TARGET: HTTP $direct_result" >&2
-    echo "Tailscale 状态: ${tailscale_status:-unknown}" >&2
+    echo "Direct to $CHECK_TARGET: HTTP $direct_result" >&2
+    echo "Tailscale status: ${tailscale_status:-unknown}" >&2
     echo "" >&2
     
     if [ "$direct_result" = "200" ]; then
-        echo "✅ 直连正常 - 不需要 VPN" >&2
+        echo "✅ Direct connection OK - VPN not needed" >&2
         return 0
     else
-        echo "❌ 直连失败 - 需要代理" >&2
+        echo "❌ Direct connection failed - Proxy needed" >&2
         return 1
     fi
 }
 
-# 启用 Tailscale
+# Enable Tailscale
 cmd_up() {
     ensure_dirs
-    log "启用 Tailscale..."
+    log "Enabling Tailscale..."
     
-    # 构建 Tailscale 命令
+    # Build Tailscale command
     local cmd="tailscale up $TAILSCALE_ARGS"
     
-    # 添加出口节点
+    # Add exit node
     if [ -n "$TAILSCALE_EXIT_NODE" ]; then
         cmd="$cmd --exit-node=$TAILSCALE_EXIT_NODE"
-        echo "🎯 使用出口节点: $TAILSCALE_EXIT_NODE" >&2
+        echo "🎯 Using exit node: $TAILSCALE_EXIT_NODE" >&2
     fi
     
-    # 添加配置文件
+    # Add config file
     if [ -n "$TAILSCALE_CONFIG" ]; then
         cmd="$cmd --config=$TAILSCALE_CONFIG"
-        echo "📄 使用配置文件: $TAILSCALE_CONFIG" >&2
+        echo "📄 Using config: $TAILSCALE_CONFIG" >&2
     fi
     
     eval $cmd
     
     sleep 2
     local status=$(get_tailscale_status)
-    echo "📡 Tailscale 状态: $status" >&2
+    echo "📡 Tailscale status: $status" >&2
     
-    # 验证连接
+    # Verify connection
     sleep 2
     if [ "$(check_direct)" = "200" ]; then
-        echo "✅ 连接成功" >&2
+        echo "✅ Connection successful" >&2
         return 0
     else
-        echo "⚠️ 连接可能不稳定" >&2
+        echo "⚠️ Connection may be unstable" >&2
         return 1
     fi
 }
 
-# 关闭 Tailscale
+# Disable Tailscale
 cmd_down() {
     ensure_dirs
-    log "关闭 Tailscale..."
+    log "Disabling Tailscale..."
     tailscale down
-    echo "⏸️ Tailscale 已关闭" >&2
+    echo "⏸️ Tailscale stopped" >&2
 }
 
-# 自动模式：检测并按需启用 VPN
+# Auto mode: check and enable VPN if needed
 cmd_auto() {
     ensure_dirs
     local direct_result=$(check_direct)
     
     if [ "$direct_result" = "200" ]; then
-        echo "🌐 直连正常，无需 VPN" >&2
+        echo "🌐 Direct connection OK, no VPN needed" >&2
         return 0
     fi
     
-    echo "❌ 直连失败 (HTTP $direct_result)，尝试启用 Tailscale..." >&2
-    log "直连失败，启用 Tailscale..."
+    echo "❌ Direct failed (HTTP $direct_result), trying Tailscale..." >&2
+    log "Direct failed, enabling Tailscale..."
     
-    # 调用 cmd_up 的逻辑
+    # Call cmd_up logic
     cmd_up_inner
     sleep 3
     
     if [ "$(check_direct)" = "200" ]; then
-        echo "✅ Tailscale 已生效" >&2
-        log "Tailscale 连接成功"
+        echo "✅ Tailscale active" >&2
+        log "Tailscale connected"
         return 0
     else
-        echo "❌ Tailscale 无法访问网络" >&2
-        log "Tailscale 连接失败"
+        echo "❌ Tailscale cannot access network" >&2
+        log "Tailscale connection failed"
         return 1
     fi
 }
 
-# 内部函数：启动 Tailscale（被 cmd_up 和 cmd_auto 调用）
+# Internal function: start Tailscale (called by cmd_up and cmd_auto)
 cmd_up_inner() {
-    # 构建 Tailscale 命令
+    # Build Tailscale command
     local ts_cmd="tailscale up $TAILSCALE_ARGS"
     
-    # 添加出口节点
+    # Add exit node
     if [ -n "$TAILSCALE_EXIT_NODE" ]; then
         ts_cmd="$ts_cmd --exit-node=$TAILSCALE_EXIT_NODE"
-        echo "🎯 使用出口节点: $TAILSCALE_EXIT_NODE" >&2
+        echo "🎯 Using exit node: $TAILSCALE_EXIT_NODE" >&2
     fi
     
-    # 添加配置文件
+    # Add config file
     if [ -n "$TAILSCALE_CONFIG" ]; then
         ts_cmd="$ts_cmd --config=$TAILSCALE_CONFIG"
-        echo "📄 使用配置文件: $TAILSCALE_CONFIG" >&2
+        echo "📄 Using config: $TAILSCALE_CONFIG" >&2
     fi
     
     eval $ts_cmd
 }
 
-# 执行命令（自动 VPN）
+# Execute command with auto VPN
 cmd_exec() {
     ensure_dirs
     
     if [ $# -eq 0 ]; then
-        echo "错误: 请指定要执行的命令" >&2
+        echo "Error: Please specify command to execute" >&2
         return 1
     fi
     
     local cmd_str="$*"
-    echo "📌 执行: $cmd_str" >&2
-    log "执行命令: $cmd_str"
+    echo "📌 Executing: $cmd_str" >&2
+    log "Executing: $cmd_str"
     
-    # 先测试直连
+    # Test direct connection first
     local direct_result=$(check_direct)
     
     if [ "$direct_result" = "200" ]; then
-        echo "🌐 直连正常" >&2
+        echo "🌐 Direct OK" >&2
         eval "$cmd_str"
         return $?
     fi
     
-    # 直连失败，启用 Tailscale
-    echo "❌ 直连失败，启用 Tailscale..." >&2
-    log "直连失败，启用 Tailscale..."
+    # Direct failed, enable Tailscale
+    echo "❌ Direct failed, enabling Tailscale..." >&2
+    log "Direct failed, enabling Tailscale..."
     
     tailscale up --accept-routes --accept-dns
     sleep 3
     
     if [ "$(check_direct)" = "200" ]; then
-        echo "📡 执行命令..." >&2
+        echo "📡 Executing command..." >&2
         eval "$cmd_str"
         return $?
     else
-        echo "❌ Tailscale 无法访问" >&2
-        log "Tailscale 无法访问"
+        echo "❌ Tailscale cannot access" >&2
+        log "Tailscale cannot access"
         return 1
     fi
 }
 
 # ============================================================
-# 规则相关命令
+# Rules Commands
 # ============================================================
 
-# 获取规则
+# Fetch rules
 cmd_fetch() {
     ensure_dirs
     local target="$1"
     
-    log "=== 开始获取规则 ==="
+    log "=== Starting to fetch rules ==="
     
     for item in "${RULES_SOURCES[@]}"; do
         local branch="${item%%:*}"
         local file="${item##*:}"
         
-        # 过滤
+        # Filter
         if [ -n "$target" ]; then
             if [ "$target" != "$branch" ] && [ "$target" != "$file" ]; then
                 continue
             fi
         fi
         
-        log "获取 $branch/$file..."
+        log "Fetching $branch/$file..."
         
         curl -sLH "Accept: application/vnd.github.v3.raw" \
             "https://api.github.com/repos/$RULES_REPO/contents/$file?ref=$branch" \
@@ -232,48 +232,48 @@ cmd_fetch() {
         fi
     done
     
-    echo "=== 规则获取完成 ===" >&2
+    echo "=== Rules fetch complete ===" >&2
     ls -lh "$CACHE_DIR" >&2
 }
 
-# 列出规则
+# List rules
 cmd_list() {
     ensure_dirs
-    echo "=== 缓存规则 ===" >&2
-    ls -lh "$CACHE_DIR" 2>/dev/null || echo "(空)" >&2
+    echo "=== Cached rules ===" >&2
+    ls -lh "$CACHE_DIR" 2>/dev/null || echo "(empty)" >&2
     
     echo "" >&2
-    echo "=== 自定义规则 ===" >&2
-    ls -lh "$CONFIG_DIR" 2>/dev/null || echo "(空)" >&2
+    echo "=== Custom rules ===" >&2
+    ls -lh "$CONFIG_DIR" 2>/dev/null || echo "(empty)" >&2
 }
 
-# 规则统计
+# Rules stats
 cmd_stats() {
     ensure_dirs
     local file="${1:-$CACHE_DIR/release_sr_top500_banlist_ad.conf}"
     
     if [ ! -f "$file" ]; then
-        echo "文件不存在: $file" >&2
-        echo "可用: $(ls $CACHE_DIR)" >&2
+        echo "File not found: $file" >&2
+        echo "Available: $(ls $CACHE_DIR)" >&2
         return 1
     fi
     
-    echo "=== $(basename $file) 统计 ===" >&2
-    echo "代理域名: $(grep -c ',Proxy$' "$file")" >&2
-    echo "直连域名: $(grep -c ',DIRECT$' "$file")" >&2
-    echo "拒绝规则: $(grep -c ',REJECT$' "$file")" >&2
-    echo "代理IP段: $(grep -c 'IP-CIDR.*,Proxy' "$file")" >&2
-    echo "总行数: $(wc -l < "$file")" >&2
+    echo "=== $(basename $file) Stats ===" >&2
+    echo "Proxy domains: $(grep -c ',Proxy$' "$file")" >&2
+    echo "Direct domains: $(grep -c ',DIRECT$' "$file")" >&2
+    echo "Reject rules: $(grep -c ',REJECT$' "$file")" >&2
+    echo "Proxy IPs: $(grep -c 'IP-CIDR.*,Proxy' "$file")" >&2
+    echo "Total lines: $(wc -l < "$file")" >&2
 }
 
-# 提取域名/IP
+# Extract domain/IP
 cmd_extract() {
     ensure_dirs
     local type="$1"
     local file="${2:-$CACHE_DIR/release_sr_top500_banlist_ad.conf}"
     
     if [ ! -f "$file" ]; then
-        echo "文件不存在: $file" >&2
+        echo "File not found: $file" >&2
         return 1
     fi
     
@@ -291,129 +291,129 @@ cmd_extract() {
             cat "$file"
             ;;
         *)
-            echo "未知类型: $type" >&2
-            echo "可用: proxy-domains, direct-domains, proxy-ips, all" >&2
+            echo "Unknown type: $type" >&2
+            echo "Available: proxy-domains, direct-domains, proxy-ips, all" >&2
             ;;
     esac
 }
 
-# 初始化自定义规则
+# Initialize custom rules
 cmd_custom_init() {
     ensure_dirs
     local custom_file="$CONFIG_DIR/custom.conf"
     
     if [ -f "$custom_file" ]; then
-        echo "自定义规则已存在: $custom_file" >&2
+        echo "Custom rules already exist: $custom_file" >&2
         cat "$custom_file"
         return
     fi
     
     cat > "$custom_file" << 'EOF'
 # ============================================
-# 自定义规则补充
-# 在此添加你的个性化规则
+# Custom Rules Supplement
+# Add your personalized rules here
 # ============================================
 
 [Rule]
-# 添加需要代理的域名
+# Add proxy domains
 # DOMAIN-SUFFIX,github.com,Proxy
 # DOMAIN,openai.com,Proxy
 
-# 添加直连域名
+# Add direct domains
 # DOMAIN-SUFFIX,baidu.com,DIRECT
 # DOMAIN-SUFFIX,qq.com,DIRECT
 
-# 添加拒绝规则
+# Add reject rules
 # DOMAIN,ads.example.com,REJECT
 
-# IP 规则
+# IP rules
 # IP-CIDR,192.168.0.0/16,DIRECT
 # GEOIP,CN,DIRECT
 
-# 兜底策略
+# Fallback strategy
 # FINAL,Proxy
 EOF
     
-    log "创建自定义规则: $custom_file"
-    echo "✅ 已创建: $custom_file" >&2
-    echo "请编辑添加你的规则" >&2
+    log "Created custom rules: $custom_file"
+    echo "✅ Created: $custom_file" >&2
+    echo "Please edit to add your rules" >&2
 }
 
-# 添加自定义规则
+# Add custom rule
 cmd_custom_add() {
     ensure_dirs
     local rule="$*"
     local custom_file="$CONFIG_DIR/custom.conf"
     
     if [ -z "$rule" ]; then
-        echo "用法: proxy.sh custom-add 'DOMAIN-SUFFIX,example.com,Proxy'" >&2
+        echo "Usage: proxy.sh custom-add 'DOMAIN-SUFFIX,example.com,Proxy'" >&2
         return 1
     fi
     
-    # 如果文件不存在，先创建
+    # If file doesn't exist, create it first
     if [ ! -f "$custom_file" ]; then
         cmd_custom_init
     fi
     
-    # 检查是否重复
+    # Check for duplicates
     if grep -q "^${rule}$" "$custom_file" 2>/dev/null; then
-        echo "规则已存在: $rule" >&2
+        echo "Rule already exists: $rule" >&2
         return 1
     fi
     
-    # 添加到 [Rule] 部分之后
+    # Add after [Rule] section
     sed -i '' "s/^\[Rule\]$/[Rule]\n$rule/" "$custom_file"
-    log "添加规则: $rule"
-    echo "✅ 已添加: $rule" >&2
+    log "Added rule: $rule"
+    echo "✅ Added: $rule" >&2
 }
 
-# 列出自定义规则
+# List custom rules
 cmd_custom_list() {
     ensure_dirs
     local custom_file="$CONFIG_DIR/custom.conf"
     
     if [ ! -f "$custom_file" ]; then
-        echo "无自定义规则 (运行 custom-init 初始化)" >&2
+        echo "No custom rules (run custom-init to initialize)" >&2
         return
     fi
     
-    echo "=== 自定义规则 ===" >&2
+    echo "=== Custom rules ===" >&2
     grep -v "^#" "$custom_file" | grep -v "^$" | grep -v "^\[" 
 }
 
-# 显示配置
+# Show config
 cmd_config_show() {
-    echo "=== 当前配置 ===" >&2
+    echo "=== Current Config ===" >&2
     echo "" >&2
-    echo "配置文件: $CONFIG_DIR/config.sh" >&2
-    echo "" >&2
-    
-    # 显示关键配置
-    echo "检测目标: $CHECK_TARGET" >&2
-    echo "检测超时: ${CHECK_TIMEOUT}秒" >&2
+    echo "Config file: $CONFIG_DIR/config.sh" >&2
     echo "" >&2
     
-    # 规则配置
-    echo "=== 规则配置 ===" >&2
-    echo "规则仓库: $RULES_REPO" >&2
-    echo "默认分支: $DEFAULT_BRANCH" >&2
-    echo "主规则文件: $PRIMARY_RULES" >&2
-    echo "规则输出: $RULES_OUTPUT" >&2
+    # Show key config
+    echo "Check target: $CHECK_TARGET" >&2
+    echo "Check timeout: ${CHECK_TIMEOUT}s" >&2
     echo "" >&2
     
-    # Tailscale 配置
-    echo "=== Tailscale 配置 ===" >&2
-    echo "启动参数: $TAILSCALE_ARGS" >&2
-    echo "出口节点: ${TAILSCALE_EXIT_NODE:-(自动)}" >&2
-    echo "配置文件: ${TAILSCALE_CONFIG:-(默认)}" >&2
-    echo "自动断开: $AUTO_DISCONNECT" >&2
+    # Rules config
+    echo "=== Rules Config ===" >&2
+    echo "Rules repo: $RULES_REPO" >&2
+    echo "Default branch: $DEFAULT_BRANCH" >&2
+    echo "Primary rules: $PRIMARY_RULES" >&2
+    echo "Rules output: $RULES_OUTPUT" >&2
     echo "" >&2
     
-    # 路径配置
-    echo "=== 路径配置 ===" >&2
-    echo "缓存目录: $CACHE_DIR" >&2
-    echo "配置目录: $CONFIG_DIR" >&2
-    echo "日志文件: $LOG_FILE" >&2
+    # Tailscale config
+    echo "=== Tailscale Config ===" >&2
+    echo "Args: $TAILSCALE_ARGS" >&2
+    echo "Exit node: ${TAILSCALE_EXIT_NODE:-(auto)}" >&2
+    echo "Config file: ${TAILSCALE_CONFIG:-(default)}" >&2
+    echo "Auto disconnect: $AUTO_DISCONNECT" >&2
+    echo "" >&2
+    
+    # Path config
+    echo "=== Path Config ===" >&2
+    echo "Cache dir: $CACHE_DIR" >&2
+    echo "Config dir: $CONFIG_DIR" >&2
+    echo "Log file: $LOG_FILE" >&2
     echo "" >&2
     
     # 显示规则源
@@ -423,22 +423,22 @@ cmd_config_show() {
     done
 }
 
-# 编辑配置
+# Edit config
 cmd_config_edit() {
     ensure_dirs
     local config_file="$CONFIG_DIR/config.sh"
     
-    # 如果配置文件不存在，从默认复制
+    # If config doesn't exist, copy from default
     if [ ! -f "$config_file" ]; then
         cp "$SCRIPT_DIR/config.sh" "$config_file"
-        echo "✅ 已创建配置文件: $config_file" >&2
+        echo "✅ Created config file: $config_file" >&2
     fi
     
-    # 使用默认编辑器打开
+    # Open with default editor
     ${EDITOR:-vim} "$config_file"
 }
 
-# 合并规则
+# Merge rules
 cmd_merge() {
     ensure_dirs
     local base="$CACHE_DIR/release_sr_top500_banlist_ad.conf"
@@ -446,29 +446,29 @@ cmd_merge() {
     local output="$CACHE_DIR/merged.conf"
     
     if [ ! -f "$base" ]; then
-        echo "基础规则不存在，请先运行 fetch" >&2
+        echo "Base rules not found, run fetch first" >&2
         return 1
     fi
     
-    # 复制基础规则
+    # Copy base rules
     cp "$base" "$output"
     
-    # 追加自定义规则
+    # Append custom rules
     if [ -f "$custom" ]; then
         local rule_section=$(grep -n "^\[Rule\]" "$custom" | cut -d: -f1)
         
         if [ -n "$rule_section" ]; then
             tail -n +$rule_section "$custom" >> "$output"
-            log "合并完成: $output"
+            log "Merge complete: $output"
         fi
     fi
     
-    echo "✅ 合并完成: $output" >&2
+    echo "✅ Merge complete: $output" >&2
     cmd_stats "$output"
 }
 
 # ============================================================
-# 主入口
+# Main Entry
 # ============================================================
 
 cmd_help() {
@@ -476,35 +476,35 @@ cmd_help() {
     echo "OpenClaw Tailscale Proxy Manager" >&2
     echo "========================================" >&2
     echo "" >&2
-    echo "用法: $0 <命令> [参数]" >&2
+    echo "Usage: $0 <command> [args]" >&2
     echo "" >&2
-    echo "VPN 命令:" >&2
-    echo "  check              检查网络状态" >&2
-    echo "  up                 启用 Tailscale" >&2
-    echo "  down               关闭 Tailscale" >&2
-    echo "  auto               自动检测并按需启用" >&2
-    echo "  exec <command>     执行命令，自动开关 VPN" >&2
+    echo "VPN Commands:" >&2
+    echo "  check              Check network status" >&2
+    echo "  up                 Enable Tailscale" >&2
+    echo "  down               Disable Tailscale" >&2
+    echo "  auto               Auto detect and enable if needed" >&2
+    echo "  exec <command>     Execute command with auto VPN" >&2
     echo "" >&2
-    echo "规则命令:" >&2
-    echo "  fetch [target]     获取规则 (可选: release, master)" >&2
-    echo "  list               列出已缓存规则" >&2
-    echo "  stats [file]       查看规则统计" >&2
-    echo "  extract <type>     提取域名/IP (proxy-domains/direct-domains/proxy-ips/all)" >&2
-    echo "  merge              合并基础+自定义规则" >&2
+    echo "Rules Commands:" >&2
+    echo "  fetch [target]     Fetch rules (optional: release, master)" >&2
+    echo "  list               List cached rules" >&2
+    echo "  stats [file]       Show rules statistics" >&2
+    echo "  extract <type>     Extract domains/IPs (proxy-domains/direct-domains/proxy-ips/all)" >&2
+    echo "  merge              Merge base+custom rules" >&2
     echo "" >&2
-    echo "自定义规则:" >&2
-    echo "  custom-init        初始化自定义规则文件" >&2
-    echo "  custom-add <rule>  添加自定义规则" >&2
-    echo "  custom-list        查看自定义规则" >&2
+    echo "Custom Rules:" >&2
+    echo "  custom-init        Initialize custom rules file" >&2
+    echo "  custom-add <rule>  Add custom rule" >&2
+    echo "  custom-list       List custom rules" >&2
     echo "" >&2
-    echo "配置命令:" >&2
-    echo "  config-show         显示当前配置" >&2
-    echo "  config-edit         编辑配置文件" >&2
+    echo "Config Commands:" >&2
+    echo "  config-show         Show current config" >&2
+    echo "  config-edit         Edit config file" >&2
     echo "" >&2
-    echo "示例:" >&2
-    echo "  $0 check                   # 检查网络" >&2
-    echo "  $0 exec curl https://api.github.com  # 自动执行" >&2
-    echo "  $0 fetch release           # 获取规则" >&2
+    echo "Examples:" >&2
+    echo "  $0 check                   # Check network" >&2
+    echo "  $0 exec curl https://api.github.com  # Auto execute" >&2
+    echo "  $0 fetch release           # Fetch rules" >&2
     echo "  $0 custom-add 'DOMAIN-SUFFIX,github.com,Proxy'" >&2
 }
 
@@ -564,7 +564,7 @@ main() {
             cmd_help
             ;;
         *)
-            echo "未知命令: $cmd" >&2
+            echo "Unknown command: $cmd" >&2
             echo "" >&2
             cmd_help
             exit 1

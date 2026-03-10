@@ -1,26 +1,26 @@
 #!/bin/bash
 # ============================================================
-# OpenClaw Tailscale Proxy 配置
+# OpenClaw Tailscale Proxy Configuration
 # ============================================================
 
 # -----------------
-# 网络检测配置
+# Network Check Config
 # -----------------
 
-# 检测目标（直连检测用）
+# Target for direct connection test
 CHECK_TARGET="api.github.com"
 
-# 检测超时（秒）
+# Connection timeout in seconds
 CHECK_TIMEOUT=5
 
 # -----------------
-# 规则源配置
+# Rules Source Config
 # -----------------
 
-# Shadowrocket 规则仓库
+# Shadowrocket rules repository
 RULES_REPO="Johnshall/Shadowrocket-ADBlock-Rules-Forever"
 
-# 要获取的规则列表 (格式: branch:filename)
+# Rules to fetch (format: branch:filename)
 RULES_SOURCES=(
     "release:sr_top500_banlist_ad.conf"
     "release:sr_top500_whitelist_ad.conf"
@@ -28,42 +28,69 @@ RULES_SOURCES=(
     "release:sr_backcn.conf"
 )
 
-# 默认获取的分支 (release/master)
+# Default branch to fetch from (release/master)
 DEFAULT_BRANCH="release"
 
 # -----------------
-# 路径配置（一般不需要修改）
+# Default Rules Config
 # -----------------
 
-# 脚本所在目录
+# Primary rules file (used after fetch by default)
+# Options: sr_top500_banlist_ad.conf, lazy.conf, sr_backcn.conf, etc.
+PRIMARY_RULES="sr_top500_banlist_ad.conf"
+
+# Merged rules output path (for use by other tools)
+RULES_OUTPUT="$CACHE_DIR/rules.conf"
+
+# -----------------
+# Tailscale Config
+# -----------------
+
+# Tailscale up command arguments
+TAILSCALE_ARGS="--accept-routes --accept-dns"
+
+# Tailscale Exit Node (IP or hostname, empty = auto)
+# Example: TAILSCALE_EXIT_NODE="100.100.100.100"
+TAILSCALE_EXIT_NODE=""
+
+# Tailscale config file path (empty = use default)
+# Example: TAILSCALE_CONFIG="$HOME/.config/tailscale/config1.yaml"
+TAILSCALE_CONFIG=""
+
+# Wait seconds after enable before checking connection
+TAILSCALE_WAIT=3
+
+# Auto disconnect after exec (true/false)
+AUTO_DISCONNECT=false
+
+# -----------------
+# Path Config (usually no need to change)
+# -----------------
+
+# Script directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# 缓存目录（规则文件）
+# Cache directory for rules
 CACHE_DIR="$HOME/.cache/openclaw-tailscale-proxy"
 
-# 配置目录（自定义规则）
+# Config directory for custom rules
 CONFIG_DIR="$HOME/.config/openclaw-tailscale-proxy"
 
-# 日志目录
+# Log directory
 LOG_DIR="$HOME/logs"
 
 # -----------------
-# 规则配置
+# Rules Files
 # -----------------
 
-# 自定义规则文件
+# Custom rules file
 CUSTOM_RULES="$CONFIG_DIR/custom.conf"
 
-# 合并后的规则文件
+# Merged rules file
 MERGED_RULES="$CACHE_DIR/merged.conf"
 
-# 规则输出文件（合并后的规则路径，供其他工具使用）
+# Rules output file
 RULES_OUTPUT="$CACHE_DIR/rules.conf"
 
-# 日志文件
+# Log file
 LOG_FILE="$LOG_DIR/openclaw-tailscale-proxy.log"
-
-# ----------------- 🎯 默认规则配置
-# 主规则文件（fetch 后默认使用的规则）
-# 可选: sr_top500_banlist_ad.conf, lazy.conf, sr_backcn.conf 等
-PRIMARY_RULES="sr_top500_banlist_ad.conf"
