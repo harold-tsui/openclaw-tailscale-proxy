@@ -200,16 +200,43 @@ cmd_exec() {
 # Rules Commands
 # ============================================================
 
-# Fetch rules
+# Fetch rules (with caching)
 cmd_fetch() {
     ensure_dirs
-    local target="$1"
+    local force=false
+    local max_age=86400  # Default: 24 hours in seconds
+    local target=""
     
-    log "=== Starting to fetch rules ==="
+    # Parse arguments
+    while [[ "$1" == --* ]]; do
+        case "$1" in
+            --force)
+                force=true
+                shift
+                ;;
+            --max-age)
+                max_age="$2"
+                shift 2
+                ;;
+            --no-cache)
+                max_age=0
+                shift
+                ;;
+            *)
+                break
+                ;;
+        esac
+    done
+    
+    # Remaining argument is target
+    target="$1"
+    
+    log "=== Starting to fetch rules (force=$force, max_age=${max_age}s) ==="
     
     for item in "${RULES_SOURCES[@]}"; do
         local branch="${item%%:*}"
         local file="${item##*:}"
+        local cache_file="$CACHE_DIR/${branch}_${file}"
         
         # Filter
         if [ -n "$target" ]; then
@@ -218,14 +245,24 @@ cmd_fetch() {
             fi
         fi
         
+        # Check cache
+        if [ -f "$cache_file" ] && [ "$force" = "false" ]; then
+            local file_age=$(($(date +%s) - $(stat -f %m "$cache_file" 2>/dev/null || stat -c %Y "$cache_file" 2>/dev/null || echo 0)))
+            if [ "$file_age" -lt "$max_age" ]; then
+                local size=$(wc -c < "$cache_file")
+                log "⏭️  Skipping $branch/$file (cache age: ${file_age}s, max: ${max_age}s) -> $size bytes"
+                continue
+            fi
+        fi
+        
         log "Fetching $branch/$file..."
         
         curl -sLH "Accept: application/vnd.github.v3.raw" \
             "https://api.github.com/repos/$RULES_REPO/contents/$file?ref=$branch" \
-            -o "$CACHE_DIR/${branch}_${file}" 2>/dev/null
+            -o "$cache_file" 2>/dev/null
         
-        if [ -s "$CACHE_DIR/${branch}_${file}" ]; then
-            local size=$(wc -c < "$CACHE_DIR/${branch}_${file}")
+        if [ -s "$cache_file" ]; then
+            local size=$(wc -c < "$cache_file")
             log "✅ $branch/$file -> $size bytes"
         else
             log "❌ Failed: $branch/$file"
@@ -438,33 +475,173 @@ cmd_config_edit() {
     ${EDITOR:-vim} "$config_file"
 }
 
-# Merge rules
+# Merge rules with deduplication
 cmd_merge() {
     ensure_dirs
+    local dedup=true
+    local output_file=""
+    
+    # Parse arguments
+    while [[ "$1" == --* ]]; do
+        case "$1" in
+            --no-dedup)
+                dedup=false
+                shift
+                ;;
+            --output|-o)
+                output_file="$2"
+                shift 2
+                ;;
+            *)
+                break
+                ;;
+        esac
+    done
+    
     local base="$CACHE_DIR/release_sr_top500_banlist_ad.conf"
     local custom="$CONFIG_DIR/custom.conf"
-    local output="$CACHE_DIR/merged.conf"
+    local output="${output_file:-$CACHE_DIR/merged.conf}"
     
     if [ ! -f "$base" ]; then
         echo "Base rules not found, run fetch first" >&2
         return 1
     fi
     
-    # Copy base rules
-    cp "$base" "$output"
+    echo "=== Merging rules ===" >&2
+    
+    # Copy base rules to temp file
+    local temp=$(mktemp)
+    cp "$base" "$temp"
     
     # Append custom rules
     if [ -f "$custom" ]; then
         local rule_section=$(grep -n "^\[Rule\]" "$custom" | cut -d: -f1)
         
         if [ -n "$rule_section" ]; then
-            tail -n +$rule_section "$custom" >> "$output"
-            log "Merge complete: $output"
+            tail -n +$rule_section "$custom" >> "$temp"
+            echo "📝 Added custom rules" >&2
         fi
     fi
     
-    echo "✅ Merge complete: $output" >&2
+    # Deduplicate if enabled
+    if [ "$dedup" = "true" ]; then
+        local before=$(wc -l < "$temp")
+        
+        # Sort and remove duplicates (keep order)
+        local deduped=$(mktemp)
+        awk '!seen[$0]++' "$temp" > "$deduped"
+        
+        local after=$(wc -l < "$deduped")
+        local removed=$((before - after))
+        
+        mv "$deduped" "$temp"
+        
+        echo "🧹 Deduplication: removed $removed duplicate rules" >&2
+    fi
+    
+    # Move to output
+    mv "$temp" "$output"
+    
+    local final_count=$(wc -l < "$output")
+    echo "✅ Merge complete: $output ($final_count rules)" >&2
+    
+    # Show stats
     cmd_stats "$output"
+    
+    log "Merged rules: $output (dedup=$dedup)"
+}
+
+# ============================================================
+# Cron / Auto Update Commands
+# ============================================================
+
+# Add cron job for auto update
+cmd_cron_add() {
+    local schedule="${1:-0 8 * * *}"  # Default: 8 AM daily
+    
+    echo "=== Setting up auto-update cron ===" >&2
+    echo "Schedule: $schedule" >&2
+    
+    # Create the cron script
+    local cron_script="$CONFIG_DIR/cron-update.sh"
+    local proxy_sh="$SCRIPT_DIR/proxy.sh"
+    local config_sh="$SCRIPT_DIR/config.sh"
+    
+    cat > "$cron_script" << EOF
+#!/bin/bash
+# Auto-update rules - Generated by openclaw-tailscale-proxy
+# Schedule: $schedule
+
+# Use absolute paths
+PROXY_SH="$proxy_sh"
+CONFIG_SH="$config_sh"
+
+source "\$CONFIG_SH"
+
+LOG_DIR="\$HOME/logs"
+mkdir -p "\$LOG_DIR"
+
+exec >> "\$LOG_DIR/openclaw-tailscale-proxy-cron.log" 2>&1
+
+echo "=== [\$(date)] Starting auto-update ==="
+
+# Fetch rules (use cache, force if > 24h)
+"\$PROXY_SH" fetch release
+
+# Merge rules
+"\$PROXY_SH" merge
+
+echo "=== [\$(date)] Auto-update complete ==="
+EOF
+    
+    chmod +x "$cron_script"
+    
+    # Add to system crontab using temp file (more reliable on macOS)
+    local full_path=$(realpath "$cron_script")
+    local temp=$(mktemp)
+    
+    echo "" >&2
+    echo "Cron script: $cron_script" >&2
+    echo "" >&2
+    
+    # Store current crontab and add new job
+    crontab -l 2>/dev/null > "$temp" || true
+    grep -v "proxy-update" "$temp" > "${temp}.2" || true
+    echo "$schedule $full_path" >> "${temp}.2"
+    crontab < "${temp}.2"
+    rm -f "$temp" "${temp}.2"
+    
+    echo "✅ Cron job added to system crontab" >&2
+    
+    echo "✅ Cron job added" >&2
+    cmd_cron_list
+}
+
+# Remove cron job
+cmd_cron_remove() {
+    echo "=== Removing auto-update cron ===" >&2
+    
+    # Remove from system crontab
+    crontab -l 2>/dev/null | grep -v "proxy-update" | crontab - 2>/dev/null || true
+    
+    echo "✅ Cron job removed" >&2
+}
+
+# List cron jobs
+cmd_cron_list() {
+    echo "=== Auto-update cron status ===" >&2
+    
+    # Check system crontab
+    echo "" >&2
+    echo "System crontab:" >&2
+    crontab -l 2>/dev/null | grep "proxy-update" || echo "  (none)" >&2
+    
+    # Show next run time
+    echo "" >&2
+    echo "Next scheduled runs:" >&2
+    for job in $(crontab -l 2>/dev/null | grep "proxy-update"); do
+        echo "  $job" >&2
+    done
 }
 
 # ============================================================
@@ -486,11 +663,14 @@ cmd_help() {
     echo "  exec <command>     Execute command with auto VPN" >&2
     echo "" >&2
     echo "Rules Commands:" >&2
-    echo "  fetch [target]     Fetch rules (optional: release, master)" >&2
-    echo "  list               List cached rules" >&2
-    echo "  stats [file]       Show rules statistics" >&2
-    echo "  extract <type>     Extract domains/IPs (proxy-domains/direct-domains/proxy-ips/all)" >&2
-    echo "  merge              Merge base+custom rules" >&2
+    echo "  fetch [target]       Fetch rules (optional: release, master)" >&2
+    echo "  list                List cached rules" >&2
+    echo "  stats [file]        Show rules statistics" >&2
+    echo "  extract <type>      Extract domains/IPs (proxy-domains/direct-domains/proxy-ips/all)" >&2
+    echo "  merge               Merge base+custom rules with deduplication" >&2
+    echo "  cron-add [schedule] Setup auto-update cron (default: 8 AM daily)" >&2
+    echo "  cron-remove         Remove auto-update cron" >&2
+    echo "  cron-list           Show cron status" >&2
     echo "" >&2
     echo "Custom Rules:" >&2
     echo "  custom-init        Initialize custom rules file" >&2
@@ -504,7 +684,11 @@ cmd_help() {
     echo "Examples:" >&2
     echo "  $0 check                   # Check network" >&2
     echo "  $0 exec curl https://api.github.com  # Auto execute" >&2
-    echo "  $0 fetch release           # Fetch rules" >&2
+    echo "  $0 fetch release           # Fetch rules (with cache)" >&2
+    echo "  $0 fetch --force release   # Force refresh rules" >&2
+    echo "  $0 merge                    # Merge rules with deduplication" >&2
+    echo "  $0 merge --no-dedup        # Merge without deduplication" >&2
+    echo "  $0 cron-add '0 8 * * *'    # Auto-update daily at 8 AM" >&2
     echo "  $0 custom-add 'DOMAIN-SUFFIX,github.com,Proxy'" >&2
 }
 
@@ -531,7 +715,7 @@ main() {
             cmd_exec "$@"
             ;;
         fetch)
-            cmd_fetch "$1"
+            cmd_fetch "$@"
             ;;
         list)
             cmd_list
@@ -543,7 +727,16 @@ main() {
             cmd_extract "$1" "$2"
             ;;
         merge)
-            cmd_merge
+            cmd_merge "$@"
+            ;;
+        cron-add)
+            cmd_cron_add "$1"
+            ;;
+        cron-remove)
+            cmd_cron_remove
+            ;;
+        cron-list)
+            cmd_cron_list
             ;;
         custom-init)
             cmd_custom_init
