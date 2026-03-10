@@ -67,7 +67,23 @@ cmd_check() {
 cmd_up() {
     ensure_dirs
     log "启用 Tailscale..."
-    tailscale up --accept-routes --accept-dns
+    
+    # 构建 Tailscale 命令
+    local cmd="tailscale up $TAILSCALE_ARGS"
+    
+    # 添加出口节点
+    if [ -n "$TAILSCALE_EXIT_NODE" ]; then
+        cmd="$cmd --exit-node=$TAILSCALE_EXIT_NODE"
+        echo "🎯 使用出口节点: $TAILSCALE_EXIT_NODE" >&2
+    fi
+    
+    # 添加配置文件
+    if [ -n "$TAILSCALE_CONFIG" ]; then
+        cmd="$cmd --config=$TAILSCALE_CONFIG"
+        echo "📄 使用配置文件: $TAILSCALE_CONFIG" >&2
+    fi
+    
+    eval $cmd
     
     sleep 2
     local status=$(get_tailscale_status)
@@ -105,7 +121,8 @@ cmd_auto() {
     echo "❌ 直连失败 (HTTP $direct_result)，尝试启用 Tailscale..." >&2
     log "直连失败，启用 Tailscale..."
     
-    tailscale up --accept-routes --accept-dns
+    # 调用 cmd_up 的逻辑
+    cmd_up_inner
     sleep 3
     
     if [ "$(check_direct)" = "200" ]; then
@@ -117,6 +134,26 @@ cmd_auto() {
         log "Tailscale 连接失败"
         return 1
     fi
+}
+
+# 内部函数：启动 Tailscale（被 cmd_up 和 cmd_auto 调用）
+cmd_up_inner() {
+    # 构建 Tailscale 命令
+    local ts_cmd="tailscale up $TAILSCALE_ARGS"
+    
+    # 添加出口节点
+    if [ -n "$TAILSCALE_EXIT_NODE" ]; then
+        ts_cmd="$ts_cmd --exit-node=$TAILSCALE_EXIT_NODE"
+        echo "🎯 使用出口节点: $TAILSCALE_EXIT_NODE" >&2
+    fi
+    
+    # 添加配置文件
+    if [ -n "$TAILSCALE_CONFIG" ]; then
+        ts_cmd="$ts_cmd --config=$TAILSCALE_CONFIG"
+        echo "📄 使用配置文件: $TAILSCALE_CONFIG" >&2
+    fi
+    
+    eval $ts_cmd
 }
 
 # 执行命令（自动 VPN）
@@ -354,18 +391,33 @@ cmd_config_show() {
     # 显示关键配置
     echo "检测目标: $CHECK_TARGET" >&2
     echo "检测超时: ${CHECK_TIMEOUT}秒" >&2
+    echo "" >&2
+    
+    # 规则配置
+    echo "=== 规则配置 ===" >&2
     echo "规则仓库: $RULES_REPO" >&2
     echo "默认分支: $DEFAULT_BRANCH" >&2
-    echo "Tailscale 参数: $TAILSCALE_ARGS" >&2
+    echo "主规则文件: $PRIMARY_RULES" >&2
+    echo "规则输出: $RULES_OUTPUT" >&2
+    echo "" >&2
+    
+    # Tailscale 配置
+    echo "=== Tailscale 配置 ===" >&2
+    echo "启动参数: $TAILSCALE_ARGS" >&2
+    echo "出口节点: ${TAILSCALE_EXIT_NODE:-(自动)}" >&2
+    echo "配置文件: ${TAILSCALE_CONFIG:-(默认)}" >&2
     echo "自动断开: $AUTO_DISCONNECT" >&2
     echo "" >&2
+    
+    # 路径配置
+    echo "=== 路径配置 ===" >&2
     echo "缓存目录: $CACHE_DIR" >&2
     echo "配置目录: $CONFIG_DIR" >&2
     echo "日志文件: $LOG_FILE" >&2
     echo "" >&2
     
     # 显示规则源
-    echo "=== 规则源 ===" >&2
+    echo "=== 规则源列表 ===" >&2
     for item in "${RULES_SOURCES[@]}"; do
         echo "  $item" >&2
     done

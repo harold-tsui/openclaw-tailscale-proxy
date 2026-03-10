@@ -32,19 +32,6 @@ RULES_SOURCES=(
 DEFAULT_BRANCH="release"
 
 # -----------------
-# Tailscale 配置
-# -----------------
-
-# Tailscale 启动参数
-TAILSCALE_ARGS="--accept-routes --accept-dns"
-
-# 启用后等待秒数（再检测连接）
-TAILSCALE_WAIT=3
-
-# 执行命令后是否自动关闭 VPN (true/false)
-AUTO_DISCONNECT=false
-
-# -----------------
 # 路径配置（一般不需要修改）
 # -----------------
 
@@ -70,5 +57,13 @@ CUSTOM_RULES="$CONFIG_DIR/custom.conf"
 # 合并后的规则文件
 MERGED_RULES="$CACHE_DIR/merged.conf"
 
+# 规则输出文件（合并后的规则路径，供其他工具使用）
+RULES_OUTPUT="$CACHE_DIR/rules.conf"
+
 # 日志文件
 LOG_FILE="$LOG_DIR/openclaw-tailscale-proxy.log"
+
+# ----------------- 🎯 默认规则配置
+# 主规则文件（fetch 后默认使用的规则）
+# 可选: sr_top500_banlist_ad.conf, lazy.conf, sr_backcn.conf 等
+PRIMARY_RULES="sr_top500_banlist_ad.conf"
