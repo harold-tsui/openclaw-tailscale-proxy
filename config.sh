@@ -7,8 +7,12 @@
 # Network Check Config
 # -----------------
 
-# Target for direct connection test
-CHECK_TARGET="api.github.com"
+# Target for direct connection test (backward compatibility)
+CHECK_TARGET="google.com"
+
+# Multiple targets for connection test (comma-separated)
+# Will try each until one works
+CHECK_TARGETS="google.com,youtube.com,api.github.com"
 
 # Connection timeout in seconds
 CHECK_TIMEOUT=5

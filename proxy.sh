@@ -8,9 +8,11 @@ set -e
 
 # Path configuration
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+CONFIG_DIR="$HOME/.config/openclaw-tailscale-proxy"
 
-# Load config
+# Load skill defaults first, then user config (user config overrides)
 source "$SCRIPT_DIR/config.sh"
+source "$CONFIG_DIR/config.sh" 2>/dev/null || true
 
 # Ensure directories exist
 ensure_dirs() {
@@ -31,9 +33,33 @@ log() {
 # VPN Commands
 # ============================================================
 
-# Check direct connection
+# Check direct connection (supports multiple targets)
 check_direct() {
-    curl -s --connect-timeout $CHECK_TIMEOUT -o /dev/null -w "%{http_code}" "https://$CHECK_TARGET" 2>/dev/null || echo "000"
+    # Default targets if not set
+    local targets="${CHECK_TARGETS:-api.github.com,github.com}"
+    
+    # Get the primary target (first in list)
+    local primary_target=$(echo "$targets" | cut -d',' -f1)
+    
+    # Check primary target - this is what we really need
+    local result=$(curl -s --connect-timeout $CHECK_TIMEOUT -o /dev/null -w "%{http_code}" "https://$primary_target" 2>/dev/null || echo "000")
+    
+    if [ "$result" = "200" ]; then
+        echo "200:$primary_target"
+        return 0
+    fi
+    
+    # If primary fails, check fallbacks
+    for target in $(echo "$targets" | tr ',' ' ' | tail -n +2); do
+        result=$(curl -s --connect-timeout $CHECK_TIMEOUT -o /dev/null -w "%{http_code}" "https://$target" 2>/dev/null || echo "000")
+        if [ "$result" = "200" ]; then
+            echo "200:$target"
+            return 0
+        fi
+    done
+    
+    echo "000:$primary_target"
+    return 1
 }
 
 # Get Tailscale status
@@ -45,17 +71,19 @@ get_tailscale_status() {
 cmd_check() {
     ensure_dirs
     local direct_result=$(check_direct)
+    local result_code="${direct_result%%:*}"
+    local result_target="${direct_result##*:}"
     local tailscale_status=$(get_tailscale_status)
     
     echo "========================================" >&2
     echo "🌐 Network Status Check" >&2
     echo "========================================" >&2
-    echo "Direct to $CHECK_TARGET: HTTP $direct_result" >&2
+    echo "Direct test: HTTP $result_code (via $result_target)" >&2
     echo "Tailscale status: ${tailscale_status:-unknown}" >&2
     echo "" >&2
     
-    if [ "$direct_result" = "200" ]; then
-        echo "✅ Direct connection OK - VPN not needed" >&2
+    if [ "$result_code" = "200" ]; then
+        echo "✅ Direct connection OK ($result_target) - VPN not needed" >&2
         return 0
     else
         echo "❌ Direct connection failed - Proxy needed" >&2
@@ -91,7 +119,9 @@ cmd_up() {
     
     # Verify connection
     sleep 2
-    if [ "$(check_direct)" = "200" ]; then
+    local conn_result=$(check_direct)
+    local conn_code="${conn_result%%:*}"
+    if [ "$conn_code" = "200" ]; then
         echo "✅ Connection successful" >&2
         return 0
     else
@@ -112,20 +142,23 @@ cmd_down() {
 cmd_auto() {
     ensure_dirs
     local direct_result=$(check_direct)
+    local result_code="${direct_result%%:*}"
     
-    if [ "$direct_result" = "200" ]; then
+    if [ "$result_code" = "200" ]; then
         echo "🌐 Direct connection OK, no VPN needed" >&2
         return 0
     fi
     
-    echo "❌ Direct failed (HTTP $direct_result), trying Tailscale..." >&2
+    echo "❌ Direct failed (HTTP $result_code), trying Tailscale..." >&2
     log "Direct failed, enabling Tailscale..."
     
     # Call cmd_up logic
     cmd_up_inner
     sleep 3
     
-    if [ "$(check_direct)" = "200" ]; then
+    local retry_result=$(check_direct)
+    local retry_code="${retry_result%%:*}"
+    if [ "$retry_code" = "200" ]; then
         echo "✅ Tailscale active" >&2
         log "Tailscale connected"
         return 0
@@ -171,8 +204,9 @@ cmd_exec() {
     
     # Test direct connection first
     local direct_result=$(check_direct)
+    local result_code="${direct_result%%:*}"
     
-    if [ "$direct_result" = "200" ]; then
+    if [ "$result_code" = "200" ]; then
         echo "🌐 Direct OK" >&2
         eval "$cmd_str"
         return $?
@@ -185,7 +219,9 @@ cmd_exec() {
     tailscale up --accept-routes --accept-dns
     sleep 3
     
-    if [ "$(check_direct)" = "200" ]; then
+    local retry_result=$(check_direct)
+    local retry_code="${retry_result%%:*}"
+    if [ "$retry_code" = "200" ]; then
         echo "📡 Executing command..." >&2
         eval "$cmd_str"
         return $?
