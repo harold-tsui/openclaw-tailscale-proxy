@@ -8,24 +8,14 @@ set -e
 
 # 路径配置
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-SKILL_DIR="$SCRIPT_DIR"
-CACHE_DIR="$HOME/.cache/openclaw-tailscale-proxy"
-CUSTOM_DIR="$HOME/.config/openclaw-tailscale-proxy"
-LOG_DIR="$HOME/logs"
-LOG_FILE="$LOG_DIR/openclaw-tailscale-proxy.log"
 
-# 规则配置
-RULES_REPO="Johnshall/Shadowrocket-ADBlock-Rules-Forever"
-RULES_SOURCES=(
-    "release:sr_top500_banlist_ad.conf"
-    "release:sr_top500_whitelist_ad.conf"
-    "release:lazy.conf"
-    "release:sr_backcn.conf"
-)
+# 加载配置
+source "$SCRIPT_DIR/config.sh"
 
-# 网络检测配置
-CHECK_TARGET="api.github.com"
-CHECK_TIMEOUT=5
+# 确保目录存在
+ensure_dirs() {
+    mkdir -p "$CACHE_DIR" "$CONFIG_DIR" "$LOG_DIR"
+}
 
 # ============================================================
 # 通用函数
@@ -35,10 +25,6 @@ log() {
     local msg="[$(date '+%Y-%m-%d %H:%M:%S')] $1"
     echo "$msg" >> "$LOG_FILE"
     echo "$msg" >&2
-}
-
-ensure_dirs() {
-    mkdir -p "$CACHE_DIR" "$CUSTOM_DIR" "$LOG_DIR"
 }
 
 # ============================================================
@@ -221,7 +207,7 @@ cmd_list() {
     
     echo "" >&2
     echo "=== 自定义规则 ===" >&2
-    ls -lh "$CUSTOM_DIR" 2>/dev/null || echo "(空)" >&2
+    ls -lh "$CONFIG_DIR" 2>/dev/null || echo "(空)" >&2
 }
 
 # 规则统计
@@ -277,7 +263,7 @@ cmd_extract() {
 # 初始化自定义规则
 cmd_custom_init() {
     ensure_dirs
-    local custom_file="$CUSTOM_DIR/custom.conf"
+    local custom_file="$CONFIG_DIR/custom.conf"
     
     if [ -f "$custom_file" ]; then
         echo "自定义规则已存在: $custom_file" >&2
@@ -320,7 +306,7 @@ EOF
 cmd_custom_add() {
     ensure_dirs
     local rule="$*"
-    local custom_file="$CUSTOM_DIR/custom.conf"
+    local custom_file="$CONFIG_DIR/custom.conf"
     
     if [ -z "$rule" ]; then
         echo "用法: proxy.sh custom-add 'DOMAIN-SUFFIX,example.com,Proxy'" >&2
@@ -347,7 +333,7 @@ cmd_custom_add() {
 # 列出自定义规则
 cmd_custom_list() {
     ensure_dirs
-    local custom_file="$CUSTOM_DIR/custom.conf"
+    local custom_file="$CONFIG_DIR/custom.conf"
     
     if [ ! -f "$custom_file" ]; then
         echo "无自定义规则 (运行 custom-init 初始化)" >&2
@@ -358,11 +344,53 @@ cmd_custom_list() {
     grep -v "^#" "$custom_file" | grep -v "^$" | grep -v "^\[" 
 }
 
+# 显示配置
+cmd_config_show() {
+    echo "=== 当前配置 ===" >&2
+    echo "" >&2
+    echo "配置文件: $CONFIG_DIR/config.sh" >&2
+    echo "" >&2
+    
+    # 显示关键配置
+    echo "检测目标: $CHECK_TARGET" >&2
+    echo "检测超时: ${CHECK_TIMEOUT}秒" >&2
+    echo "规则仓库: $RULES_REPO" >&2
+    echo "默认分支: $DEFAULT_BRANCH" >&2
+    echo "Tailscale 参数: $TAILSCALE_ARGS" >&2
+    echo "自动断开: $AUTO_DISCONNECT" >&2
+    echo "" >&2
+    echo "缓存目录: $CACHE_DIR" >&2
+    echo "配置目录: $CONFIG_DIR" >&2
+    echo "日志文件: $LOG_FILE" >&2
+    echo "" >&2
+    
+    # 显示规则源
+    echo "=== 规则源 ===" >&2
+    for item in "${RULES_SOURCES[@]}"; do
+        echo "  $item" >&2
+    done
+}
+
+# 编辑配置
+cmd_config_edit() {
+    ensure_dirs
+    local config_file="$CONFIG_DIR/config.sh"
+    
+    # 如果配置文件不存在，从默认复制
+    if [ ! -f "$config_file" ]; then
+        cp "$SCRIPT_DIR/config.sh" "$config_file"
+        echo "✅ 已创建配置文件: $config_file" >&2
+    fi
+    
+    # 使用默认编辑器打开
+    ${EDITOR:-vim} "$config_file"
+}
+
 # 合并规则
 cmd_merge() {
     ensure_dirs
     local base="$CACHE_DIR/release_sr_top500_banlist_ad.conf"
-    local custom="$CUSTOM_DIR/custom.conf"
+    local custom="$CONFIG_DIR/custom.conf"
     local output="$CACHE_DIR/merged.conf"
     
     if [ ! -f "$base" ]; then
@@ -417,6 +445,10 @@ cmd_help() {
     echo "  custom-add <rule>  添加自定义规则" >&2
     echo "  custom-list        查看自定义规则" >&2
     echo "" >&2
+    echo "配置命令:" >&2
+    echo "  config-show         显示当前配置" >&2
+    echo "  config-edit         编辑配置文件" >&2
+    echo "" >&2
     echo "示例:" >&2
     echo "  $0 check                   # 检查网络" >&2
     echo "  $0 exec curl https://api.github.com  # 自动执行" >&2
@@ -469,6 +501,12 @@ main() {
             ;;
         custom-list)
             cmd_custom_list
+            ;;
+        config-show)
+            cmd_config_show
+            ;;
+        config-edit)
+            cmd_config_edit
             ;;
         help|--help|-h)
             cmd_help
