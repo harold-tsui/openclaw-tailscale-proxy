@@ -1,0 +1,13 @@
+# 日志
+*.log
+
+# 缓存
+.cache/
+.config/openclaw-tailscale-proxy/
+
+# macOS
+.DS_Store
+
+# 临时文件
+*.swp
+*.tmp
